@@ -5,9 +5,9 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { getDrivers, getActiveUsageByDriver, startUsage, endUsage } from '@/app/actions'
+import { getDrivers, getActiveUsageByDriver, startUsage, endUsage, getActiveUsages } from '@/app/actions'
 import type { Surucu, Kullanim } from '@/types/kullanim'
-import { Play, Square, Clock, CheckCircle, ArrowLeft } from 'lucide-react'
+import { Play, Square, Clock, CheckCircle, ArrowLeft, AlertTriangle } from 'lucide-react'
 
 const DRIVER_COLORS: Record<string, string> = {
   'Ferhat Buğdaycı': 'bg-blue-100 text-blue-800',
@@ -54,6 +54,7 @@ function ElapsedTimer({ startTime }: { startTime: string }) {
 
 export function DriverSelector() {
   const [drivers, setDrivers] = useState<Surucu[]>([])
+  const [activeUsages, setActiveUsages] = useState<Kullanim[]>([])
   const [selectedDriver, setSelectedDriver] = useState<string | null>(null)
   const [activeUsage, setActiveUsage] = useState<Kullanim | null>(null)
   const [loading, setLoading] = useState(true)
@@ -67,8 +68,20 @@ export function DriverSelector() {
   } | null>(null)
 
   useEffect(() => {
-    getDrivers().then(({ data }) => { setDrivers(data); setLoading(false) })
+    async function load() {
+      const [{ data: driverData }, { data: activeData }] = await Promise.all([
+        getDrivers(),
+        getActiveUsages(),
+      ])
+      setDrivers(driverData)
+      setActiveUsages(activeData || [])
+      setLoading(false)
+    }
+    load()
   }, [])
+
+  // Araçta başka biri var mı?
+  const otherActiveUsage = activeUsages.find(u => u.surucu !== selectedDriver)
 
   async function handleDriverSelect(driverName: string) {
     setSelectedDriver(driverName)
@@ -80,6 +93,8 @@ export function DriverSelector() {
 
   async function handleStartUsage() {
     if (!selectedDriver) return
+    // Başka biri araçtaysa engelle
+    if (otherActiveUsage) return
     setActionLoading(true)
     const { success, error, data } = await startUsage(selectedDriver, aciklama || undefined)
     if (success && data) {
@@ -165,19 +180,41 @@ export function DriverSelector() {
           <CardDescription>İsminizi seçerek devam edin</CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Araçta biri varsa uyarı göster */}
+          {activeUsages.length > 0 && (
+            <div className="mb-4 p-3 rounded-xl bg-amber-50 border border-amber-200 flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <p className="text-sm text-amber-800">
+                <strong>{activeUsages[0].surucu}</strong> şu an araçta.
+                Sadece o kişi kullanımı bitirebilir.
+              </p>
+            </div>
+          )}
           <div className="flex flex-col gap-3">
-            {drivers.map((driver) => (
-              <button
-                key={driver.id}
-                className="flex items-center gap-4 p-4 rounded-xl border-2 border-border hover:border-primary hover:bg-accent transition-all text-left w-full"
-                onClick={() => handleDriverSelect(driver.isim)}
-              >
-                <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${DRIVER_COLORS[driver.isim] || 'bg-gray-100 text-gray-800'}`}>
-                  {initials(driver.isim)}
-                </div>
-                <span className="text-lg font-medium">{driver.isim}</span>
-              </button>
-            ))}
+            {drivers.map((driver) => {
+              const isActive = activeUsages.some(u => u.surucu === driver.isim)
+              const isBlocked = activeUsages.length > 0 && !isActive
+              return (
+                <button
+                  key={driver.id}
+                  className={`flex items-center gap-4 p-4 rounded-xl border-2 transition-all text-left w-full
+                    ${isActive ? 'border-green-400 bg-green-50' : ''}
+                    ${isBlocked ? 'border-border opacity-40 cursor-not-allowed' : ''}
+                    ${!isActive && !isBlocked ? 'border-border hover:border-primary hover:bg-accent cursor-pointer' : ''}
+                  `}
+                  onClick={() => !isBlocked && handleDriverSelect(driver.isim)}
+                  disabled={isBlocked}
+                >
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center font-bold text-sm shrink-0 ${DRIVER_COLORS[driver.isim] || 'bg-gray-100 text-gray-800'}`}>
+                    {initials(driver.isim)}
+                  </div>
+                  <div className="flex-1">
+                    <span className="text-lg font-medium">{driver.isim}</span>
+                    {isActive && <p className="text-xs text-green-600 font-medium">Araçta — bitirmek için seç</p>}
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </CardContent>
       </Card>
@@ -201,7 +238,6 @@ export function DriverSelector() {
         {actionLoading ? (
           <div className="py-12 text-center text-muted-foreground animate-pulse">İşleniyor...</div>
         ) : activeUsage ? (
-          // Aktif kullanım — sadece bitir butonu
           <div className="space-y-5">
             <div className="bg-green-50 border border-green-200 rounded-xl p-6 text-center space-y-2">
               <div className="text-xs font-medium text-green-600 uppercase tracking-wide">Aktif Kullanım</div>
@@ -218,7 +254,6 @@ export function DriverSelector() {
             </Button>
           </div>
         ) : (
-          // Yeni kullanım — sadece açıklama + başlat
           <div className="space-y-5">
             <div className="bg-muted rounded-xl p-4 text-center text-sm text-muted-foreground">
               Tarih ve saat otomatik kaydedilecek
